@@ -1,3 +1,11 @@
+### ---------------------------------------------------------------------------------- ###
+# Cortex API Wrapper for Emotiv Cortex
+# Author: Emotiv Inc.
+# Date: 2026-07-17
+# Description: copied from prev version of cortex.py for the BCI Scanning Board project.
+### ---------------------------------------------------------------------------------- ###
+
+
 import sys
 import warnings
 # --- BEGIN: Simplified environment checks ---

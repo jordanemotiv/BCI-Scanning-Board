@@ -1,3 +1,13 @@
+### ---------------------------------------------------------------------------------- ###
+# LEGACY VERSION: Single-Switch Scanning Board (Live Headset Trace Mode)
+# Author: Jordan Labio
+# Date: 2026-06-15
+# Description: This is a legacy version of the BCI Scanning Board that operates in a "Live Headset Trace Mode" for real-time testing and debugging of Emotiv Cortex 
+#              mental commands. It is not intended for production use and may lack certain features present in the main application 
+#              (setup screen, configuration options, etc.). Use this version for development and testing purposes only.
+### ---------------------------------------------------------------------------------- ###
+
+
 import sys
 import json
 import os

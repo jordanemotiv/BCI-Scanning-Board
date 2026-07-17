@@ -1,3 +1,13 @@
+### ---------------------------------------------------------------------------------- ###
+# FINAL VERSION: Single-Switch Scanning Board (Diagnostics Mode)
+# Author: Jordan Labio
+# Date: 2026-07-17
+# Description: This is the final version of the BCI Scanning Board that operates in a "Diagnostics Mode" for real-time testing and debugging of Emotiv Cortex.
+#              It includes a setup screen, configuration options, and a live headset trace for monitoring mental commands, contact quality, and EEG quality.
+#              It is intended to help nonverbal individuals communicate more effectively using thought and facial expressions. It is user-friendly and provides visual 
+#              feedback for both the user and the caregiver.
+### ---------------------------------------------------------------------------------- ###
+
 import sys
 import json
 import os
