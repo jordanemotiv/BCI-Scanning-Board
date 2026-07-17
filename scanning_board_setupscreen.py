@@ -3,7 +3,7 @@ import json
 import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QGridLayout, 
                              QLabel, QVBoxLayout, QHBoxLayout, QPushButton, 
-                             QStackedWidget, QCheckBox)
+                             QStackedWidget, QCheckBox, QSlider)
 from PyQt6.QtCore import QTimer, Qt, QThread, pyqtSignal, QPoint
 from PyQt6.QtGui import QFont, QPainter, QColor, QPen
 
@@ -344,6 +344,7 @@ class BCICommunicationBoard(QMainWindow):
 
     def build_keyboard_screen(self):
         self.keyboard_page = QWidget()
+        self.keyboard_page.setStyleSheet("background-color: #f8fafc;") 
         self.main_layout = QVBoxLayout(self.keyboard_page)
         
         self.boards = {"ALPHA": BOARD_2_ALPHA, "PHRASES": BOARD_1_PHRASES}
@@ -362,24 +363,67 @@ class BCICommunicationBoard(QMainWindow):
         self.speed_index = 1 
         self.composed_text = ""
 
-        self.ACTIVATION_THRESHOLD = 0.35  
+        # --- THRESHOLD AND POST-SELECTION COOLDOWN VARIABLES ---
+        self.MENTAL_THRESHOLD = 0.35      
+        self.FACIAL_THRESHOLD = 0.70      
+        self.SELECTION_COOLDOWN_MS = 2500 
+        
         self.latch_released = True
         self.facial_latch_released = True 
+        self.in_cooldown = False          
 
-        # Live State string caches for unified updates
         self.mental_state_str = "NEUTRAL (IDLING) [Power: 0.00]"
         self.facial_state_str = "READY (IDLING)"
 
         self.display_box = QLabel("Composed Message: ")
-        self.display_box.setFont(QFont("Arial", 20, QFont.Weight.Bold))
-        self.display_box.setStyleSheet("background-color: #1e1e24; color: #00ff66; padding: 15px; border-radius: 8px; border: 2px solid #333;")
+        self.display_box.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
+        self.display_box.setStyleSheet("background-color: #1e1e24; color: #2ecc71; padding: 15px; border-radius: 8px; border: 2px solid #111115;")
         self.display_box.setWordWrap(True)
         self.main_layout.addWidget(self.display_box)
 
         # Dynamic Unified Telemetry Box
         self.telemetry_label = QLabel()
-        self.telemetry_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        self.telemetry_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         self.main_layout.addWidget(self.telemetry_label)
+
+        # --- HARDWARE SENSITIVITY TUNING BAR ---
+        tuning_panel = QWidget()
+        tuning_panel.setStyleSheet("background-color: #ffffff; border-radius: 6px; border: 1px solid #e2e8f0;")
+        tuning_layout = QHBoxLayout(tuning_panel)
+        tuning_layout.setContentsMargins(15, 6, 15, 6)
+
+        # Thought Slider Control Elements
+        self.mental_slider_lbl = QLabel(f"Thought Sens: {self.MENTAL_THRESHOLD:.2f}")
+        self.mental_slider_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.mental_slider_lbl.setStyleSheet("color: #4f5d75; border: none;")
+        tuning_layout.addWidget(self.mental_slider_lbl)
+
+        self.mental_slider = QSlider(Qt.Orientation.Horizontal)
+        self.mental_slider.setRange(5, 95)
+        self.mental_slider.setValue(int(self.MENTAL_THRESHOLD * 100))
+        self.mental_slider.setFixedWidth(140)
+        self.mental_slider.setStyleSheet("QSlider::handle:horizontal { background-color: #d9145a; border-radius: 5px; }")
+        self.mental_slider.valueChanged.connect(self.handle_mental_slider_changed)
+        tuning_layout.addWidget(self.mental_slider)
+
+        tuning_layout.addSpacing(30)
+
+        # Facial Slider Control Elements
+        self.facial_slider_lbl = QLabel(f"Facial Sens: {self.FACIAL_THRESHOLD:.2f}")
+        self.facial_slider_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.facial_slider_lbl.setStyleSheet("color: #4f5d75; border: none;")
+        tuning_layout.addWidget(self.facial_slider_lbl)
+
+        self.facial_slider = QSlider(Qt.Orientation.Horizontal)
+        self.facial_slider.setRange(5, 95)
+        self.facial_slider.setValue(int(self.FACIAL_THRESHOLD * 100))
+        self.facial_slider.setFixedWidth(140)
+        self.facial_slider.setStyleSheet("QSlider::handle:horizontal { background-color: #d9145a; border-radius: 5px; }")
+        self.facial_slider.valueChanged.connect(self.handle_facial_slider_changed)
+        tuning_layout.addWidget(self.facial_slider)
+        
+        tuning_layout.addStretch()
+        self.main_layout.addWidget(tuning_panel)
 
         self.grid_container = QWidget()
         self.grid_layout = QGridLayout(self.grid_container)
@@ -389,78 +433,101 @@ class BCICommunicationBoard(QMainWindow):
         
         status_layout = QHBoxLayout()
         self.status_label = QLabel("Mode: AUTOMATIC SCAN")
-        self.status_label.setFont(QFont("Arial", 11, QFont.Weight.Bold))
-        self.status_label.setStyleSheet("color: #333; padding-right: 10px;")
+        self.status_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        self.status_label.setStyleSheet("color: #1e293b; padding-right: 10px;")
         status_layout.addWidget(self.status_label)
         
         speed_title = QLabel("Speed: ")
-        speed_title.setFont(QFont("Arial", 11))
+        speed_title.setFont(QFont("Segoe UI", 11))
         status_layout.addWidget(speed_title)
         
         self.speed_widgets = []
         for name in self.speed_names:
             lbl = QLabel(name)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+            lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
             lbl.setFixedSize(85, 22)
             status_layout.addWidget(lbl)
             self.speed_widgets.append(lbl)
             
         status_layout.addStretch()
 
-        # Facial Expressions Selector Checkbox
+        # Input Source Selectors
+        self.mental_selector = QCheckBox("Include Thoughts")
+        self.mental_selector.setChecked(True)
+        self.mental_selector.setFont(QFont("Segoe UI", 10, QFont.Weight.Medium))
+        self.mental_selector.setStyleSheet("QCheckBox { color: #334155; spacing: 4px; padding-right: 10px; }")
+        self.mental_selector.toggled.connect(self.handle_stream_selectors_toggled)
+        status_layout.addWidget(self.mental_selector)
+
         self.facial_selector = QCheckBox("Include Facial Expressions")
         self.facial_selector.setChecked(True) 
         self.facial_selector.setFont(QFont("Segoe UI", 10, QFont.Weight.Medium))
-        self.facial_selector.setStyleSheet("""
-            QCheckBox { color: #334155; spacing: 6px; padding-right: 15px; }
-            QCheckBox::indicator { width: 15px; height: 15px; }
-        """)
-        self.facial_selector.toggled.connect(self.handle_facial_selector_toggled)
+        self.facial_selector.setStyleSheet("QCheckBox { color: #334155; spacing: 4px; padding-right: 15px; }")
+        self.facial_selector.toggled.connect(self.handle_stream_selectors_toggled)
         status_layout.addWidget(self.facial_selector)
 
         self.keyboard_network_status_label = QLabel("BCI: Calibration Completed.")
-        self.keyboard_network_status_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
-        self.keyboard_network_status_label.setStyleSheet("color: #28a745; padding-right: 10px;")
+        self.keyboard_network_status_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.keyboard_network_status_label.setStyleSheet("color: #2ecc71; padding-right: 10px;")
         status_layout.addWidget(self.keyboard_network_status_label)
         
-        self.controls_label = QLabel("Push/Clench = SELECT  •  Pull/Furrow = SPEED")
-        self.controls_label.setFont(QFont("Arial", 11, QFont.Weight.Bold))
-        self.controls_label.setStyleSheet("color: #0056b3; padding: 5px;")
+        self.controls_label = QLabel("Push/Clench = SELECT  •  Pull/Frown = SPEED")
+        self.controls_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        self.controls_label.setStyleSheet("color: #4f5d75; padding: 5px;")
         status_layout.addWidget(self.controls_label)
         self.main_layout.addLayout(status_layout)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.advance_scanner)
 
-        # Initial dashboard rendering pass
+        self.update_telemetry_box("neutral")
+
+    def handle_mental_slider_changed(self, value):
+        self.MENTAL_THRESHOLD = value / 100.0
+        self.mental_slider_lbl.setText(f"Thought Sens: {self.MENTAL_THRESHOLD:.2f}")
+        self.update_telemetry_box("neutral")
+
+    def handle_facial_slider_changed(self, value):
+        self.FACIAL_THRESHOLD = value / 100.0
+        self.facial_slider_lbl.setText(f"Facial Sens: {self.FACIAL_THRESHOLD:.2f}")
         self.update_telemetry_box("neutral")
 
     def update_telemetry_box(self, style_preset="neutral"):
-        """Compiles and updates text states based on selector toggle settings."""
-        text = f"BCI FRAMEWORK — MENTAL INTENT: {self.mental_state_str}"
+        mental_part = self.mental_state_str if self.mental_selector.isChecked() else "DISABLED"
+        text = f"BCI FRAMEWORK — MENTAL INTENT: {mental_part}"
+        
         if self.facial_selector.isChecked():
             text += f"   |   FACIAL EMG STATE: {self.facial_state_str}"
+        else:
+            text += f"   |   FACIAL EMG STATE: DISABLED"
         
         self.telemetry_label.setText(text)
         
         if style_preset == "neutral":
-            self.telemetry_label.setStyleSheet("background-color: #2b2d42; color: #edf2f4; padding: 10px; border-radius: 6px; margin-top: 5px; border: 1px solid #4a4e69;")
+            self.telemetry_label.setStyleSheet("background-color: #1e1e24; color: #edf2f4; padding: 10px; border-radius: 6px; margin-top: 5px; border: 1px solid #334155;")
         elif style_preset == "warning":
-            self.telemetry_label.setStyleSheet("background-color: #f4a261; color: #2b2d42; padding: 10px; border-radius: 6px; margin-top: 5px; border: 1px solid #e76f51;")
+            self.telemetry_label.setStyleSheet("background-color: #f39c12; color: #ffffff; padding: 10px; border-radius: 6px; margin-top: 5px; border: 1px solid #d35400;")
         elif style_preset == "locked":
-            self.telemetry_label.setStyleSheet("background-color: #e63946; color: #ffffff; padding: 10px; border-radius: 6px; margin-top: 5px; border: 1px solid #b7094c;")
+            self.telemetry_label.setStyleSheet("background-color: #334155; color: #cbd5e1; padding: 10px; border-radius: 6px; margin-top: 5px; border: 1px solid #475569;")
         elif style_preset == "mental_trigger":
-            self.telemetry_label.setStyleSheet("background-color: #2a9d8f; color: #ffffff; padding: 10px; border-radius: 6px; margin-top: 5px; border: 1px solid #1d3557;")
+            self.telemetry_label.setStyleSheet("background-color: #d9145a; color: #ffffff; padding: 10px; border-radius: 6px; margin-top: 5px; border: 1px solid #b00f46;")
         elif style_preset == "facial_trigger":
-            self.telemetry_label.setStyleSheet("background-color: #0077b6; color: #ffffff; padding: 10px; border-radius: 6px; margin-top: 5px; border: 1px solid #03045e;")
+            self.telemetry_label.setStyleSheet("background-color: #4f5d75; color: #ffffff; padding: 10px; border-radius: 6px; margin-top: 5px; border: 1px solid #2b2d42;")
 
-    def handle_facial_selector_toggled(self, checked):
-        """Dispatches label layout updates instantly when user clicks checkbox toggle."""
-        if checked:
-            self.controls_label.setText("Push/Clench = SELECT  •  Pull/Furrow = SPEED")
-        else:
+    def handle_stream_selectors_toggled(self):
+        m_on = self.mental_selector.isChecked()
+        f_on = self.facial_selector.isChecked()
+
+        if m_on and f_on:
+            self.controls_label.setText("Push/Clench = SELECT  •  Pull/Frown = SPEED")
+        elif m_on and not f_on:
             self.controls_label.setText("Push = SELECT  •  Pull = SPEED")
+        elif not m_on and f_on:
+            self.controls_label.setText("Clench = SELECT  •  Frown = SPEED")
+        else:
+            self.controls_label.setText("ALL BCI OVERRIDES DISABLED")
+            
         self.update_telemetry_box("neutral")
 
     def build_board_grid(self):
@@ -476,9 +543,9 @@ class BCICommunicationBoard(QMainWindow):
                 text = self.current_matrix[r][c]
                 label = QLabel(text)
                 label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+                label.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
                 label.setWordWrap(True)
-                label.setStyleSheet("border: 2px solid #dcdcdc; background-color: #ffffff; border-radius: 6px; padding: 5px;")
+                label.setStyleSheet("border: 1px solid #e2e8f0; background-color: #ffffff; border-radius: 6px; padding: 5px; color: #1e293b;")
                 self.grid_layout.addWidget(label, r, c)
                 row_widgets.append(label)
             self.grid_widgets.append(row_widgets)
@@ -560,7 +627,10 @@ class BCICommunicationBoard(QMainWindow):
             self.setup_network_log.setStyleSheet("color: #f39c12; font-weight: bold;")
 
     def route_bci_command(self, command, power):
-        if self.page_container.currentIndex() != 1:
+        if self.page_container.currentIndex() != 1 or self.in_cooldown:
+            return
+
+        if not self.mental_selector.isChecked():
             return
 
         clean_command = command.strip().lower()
@@ -573,14 +643,14 @@ class BCICommunicationBoard(QMainWindow):
             self.latch_released = True
             return
 
-        if power < self.ACTIVATION_THRESHOLD:
+        if power < self.MENTAL_THRESHOLD:
             self.mental_state_str = f"{clean_command.upper()} ({mapped_action}) [Power: {power:.2f}] (Below Threshold)"
             self.update_telemetry_box("warning")
             self.latch_released = True
             return
 
         if not self.latch_released:
-            self.mental_state_str = f"{clean_command.upper()} ({mapped_action}) [Power: {power:.2f}] (LOCKED - Relax Mind)"
+            self.mental_state_str = f"{clean_command.upper()} ({mapped_action}) [Power: {power:.2f}] (LOCKED)"
             self.update_telemetry_box("locked")
             return
 
@@ -594,19 +664,17 @@ class BCICommunicationBoard(QMainWindow):
             self.trigger_speed_change()
 
     def route_facial_command(self, u_act, u_pow, l_act, l_pow):
-        """Asynchronously handles 32Hz facial EMG commands as clean hardware overrides."""
-        if self.page_container.currentIndex() != 1:
+        if self.page_container.currentIndex() != 1 or self.in_cooldown:
             return
 
-        # 🚫 HARD GUARD: Exit immediately if toggle selection is off
         if not self.facial_selector.isChecked():
             return
 
-        clench_active = (l_act.strip().lower() == "clench" and l_pow >= self.ACTIVATION_THRESHOLD)
-        furrow_active = (u_act.strip().lower() == "furrow" and u_pow >= self.ACTIVATION_THRESHOLD)
+        clench_active = (l_act.strip().lower() == "clench" and l_pow >= self.FACIAL_THRESHOLD)
+        
+        frown_active = (u_act.strip().lower() == "frown" and u_pow >= self.FACIAL_THRESHOLD)
 
-        # Handle facial relaxation phase
-        if not clench_active and not furrow_active:
+        if not clench_active and not frown_active:
             self.facial_latch_released = True
             if self.facial_state_str != "READY (IDLING)":
                 self.facial_state_str = "READY (IDLING)"
@@ -622,8 +690,8 @@ class BCICommunicationBoard(QMainWindow):
             self.facial_latch_released = False
             self.trigger_select_event()
             
-        elif furrow_active:
-            self.facial_state_str = f"TRIGGERED FURROW (SPEED BACKUP)! [Power: {u_pow:.2f}]"
+        elif frown_active:
+            self.facial_state_str = f"TRIGGERED FROWN (SPEED BACKUP)! [Power: {u_pow:.2f}]"
             self.update_telemetry_box("facial_trigger")
             self.facial_latch_released = False
             self.trigger_speed_change()
@@ -644,40 +712,25 @@ class BCICommunicationBoard(QMainWindow):
                 is_flip_button = (widget.text() == "FLIP OVER")
                 is_starter_col = (self.current_board_name == "PHRASES" and c == 0)
                 
+                base_style = "border: 1px solid #e2e8f0; background-color: #ffffff; color: #1e293b; border-radius: 6px; padding: 5px;"
+                if is_starter_col:
+                    base_style = "border: 1px dashed #4f5d75; background-color: #f1f5f9; color: #4f5d75; font-weight: bold; border-radius: 6px; padding: 5px;"
+                elif is_flip_button:
+                    base_style = "border: 1px solid #cbd5e1; background-color: #f8fafc; color: #d9145a; font-weight: bold; border-radius: 6px; padding: 5px;"
+
                 if self.scanning_state == self.SCAN_ROWS:
                     if r == self.active_row:
-                        if is_flip_button:
-                            widget.setStyleSheet("border: 4px solid #003366; background-color: #ff9999; color: #7f0000; font-weight: 900; border-radius: 6px;")
-                        else:
-                            widget.setStyleSheet("border: 3px solid #003366; background-color: #cbdcf7; color: #000000; border-radius: 6px;")
+                        widget.setStyleSheet("border: 2px solid #d9145a; background-color: #fdf2f8; color: #1e1e24; border-radius: 6px; padding: 5px;")
                     else:
-                        if is_flip_button:
-                            widget.setStyleSheet("border: 2px solid #bd2130; background-color: #dc3545; color: #ffffff; font-weight: 900; border-radius: 6px;")
-                        elif is_starter_col:
-                            widget.setStyleSheet("border: 2px solid #5f27cd; background-color: #ddd6ff; color: #341f97; font-weight: bold; border-radius: 6px;")
-                        else:
-                            widget.setStyleSheet("border: 2px solid #dcdcdc; background-color: #ffffff; color: #000000; border-radius: 6px;")
+                        widget.setStyleSheet(base_style)
                 
                 elif self.scanning_state == self.SCAN_COLS:
                     if r == self.active_row and c == self.active_col:
-                        if is_flip_button:
-                            widget.setStyleSheet("border: 5px solid #28a745; background-color: #bd2130; color: #ffffff; font-weight: 900; border-radius: 6px;")
-                        else:
-                            widget.setStyleSheet("border: 4px solid #28a745; background-color: #d4edda; color: #000000; font-weight: bold; border-radius: 6px;")
+                        widget.setStyleSheet("border: 2px solid #b00f46; background-color: #d9145a; color: #ffffff; font-weight: bold; border-radius: 6px; padding: 5px;")
                     elif r == self.active_row:
-                        if is_flip_button:
-                            widget.setStyleSheet("border: 2px solid #003366; background-color: #ff9999; color: #7f0000; font-weight: 900; border-radius: 6px;")
-                        elif is_starter_col:
-                            widget.setStyleSheet("border: 2px solid #003366; background-color: #b2bec3; color: #2d3436; font-weight: bold; border-radius: 6px;")
-                        else:
-                            widget.setStyleSheet("border: 2px solid #003366; background-color: #f7f9fa; color: #444444; border-radius: 6px;")
+                        widget.setStyleSheet("border: 1px solid #d9145a; background-color: #fff1f2; color: #64748b; border-radius: 6px; padding: 5px;")
                     else:
-                        if is_flip_button:
-                            widget.setStyleSheet("border: 2px solid #f5c6cb; background-color: #f8d7da; color: #f5c6cb; font-weight: 900; border-radius: 6px;")
-                        elif is_starter_col:
-                            widget.setStyleSheet("border: 2px solid #f0f0f0; background-color: #f3f0ff; color: #c8c2f2; font-weight: bold; border-radius: 6px;")
-                        else:
-                            widget.setStyleSheet("border: 2px solid #f0f0f0; background-color: #fafafa; color: #cccccc; border-radius: 6px;")
+                        widget.setStyleSheet("border: 1px solid #f1f5f9; background-color: #ffffff; color: #cbd5e1; border-radius: 6px; padding: 5px;")
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Space:
@@ -686,19 +739,49 @@ class BCICommunicationBoard(QMainWindow):
                 self.process_contact_quality({"AF3": 4, "AF4": 4, "T7": 4, "T8": 4, "Pz": 4})
                 self.process_eeg_quality({"AF3": 4, "AF4": 4, "T7": 4, "T8": 4, "Pz": 4})
             else:
-                self.trigger_select_event()
+                if not self.in_cooldown:
+                    self.trigger_select_event()
         elif event.key() == Qt.Key.Key_S and self.page_container.currentIndex() == 1:
-            self.trigger_speed_change()
+            if not self.in_cooldown:
+                self.trigger_speed_change()
 
     def trigger_select_event(self):
         if self.scanning_state == self.SCAN_ROWS:
             self.scanning_state = self.SCAN_COLS
             self.active_col = 0
+            self.update_ui_highlights()
+            
+            self.in_cooldown = True
+            self.timer.stop() 
+            self.keyboard_network_status_label.setText("BCI: Row Locked. Relax Mind/Face...")
+            self.keyboard_network_status_label.setStyleSheet("color: #d9145a; font-weight: bold;")
+            
+            QTimer.singleShot(self.SELECTION_COOLDOWN_MS, self.end_selection_cooldown)
+
         elif self.scanning_state == self.SCAN_COLS:
             selected_text = self.current_matrix[self.active_row][self.active_col]
             self.process_selection(selected_text)
+            
+            self.in_cooldown = True
+            self.timer.stop() 
+            self.keyboard_network_status_label.setText("BCI: Letter Selected. Relax Mind/Face...")
+            self.keyboard_network_status_label.setStyleSheet("color: #d9145a; font-weight: bold;")
+            
             self.scanning_state = self.SCAN_ROWS
             self.active_row = 0
+            self.update_ui_highlights()
+            
+            QTimer.singleShot(self.SELECTION_COOLDOWN_MS, self.end_selection_cooldown)
+
+    def end_selection_cooldown(self):
+        self.in_cooldown = False
+        self.latch_released = True
+        self.facial_latch_released = True
+        
+        self.keyboard_network_status_label.setText("BCI: Scanner Active.")
+        self.keyboard_network_status_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
+        
+        self.timer.start(self.scan_intervals[self.speed_index])
         self.update_ui_highlights()
 
     def trigger_speed_change(self):
@@ -709,9 +792,9 @@ class BCICommunicationBoard(QMainWindow):
     def update_status_bar(self):
         for i, lbl in enumerate(self.speed_widgets):
             if i == self.speed_index:
-                lbl.setStyleSheet("background-color: #003366; color: #ffffff; border: 1px solid #001122; border-radius: 4px;")
+                lbl.setStyleSheet("background-color: #d9145a; color: #ffffff; border-radius: 4px; font-weight: bold;")
             else:
-                lbl.setStyleSheet("background-color: #e0e0e0; color: #888888; border-radius: 4px;")
+                lbl.setStyleSheet("background-color: #e2e8f0; color: #475569; border-radius: 4px;")
 
     def process_selection(self, text):
         if not text or text.strip() == "": return
