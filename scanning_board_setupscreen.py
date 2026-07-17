@@ -80,9 +80,6 @@ class EmotivCortexWorker(QThread):
         try:
             cortex = Cortex(client_id, client_secret)
 
-            # =========================================================================
-            # 🔥 ADAPTIVE MONKEY PATCH: Dynamic Unpacking for Insight & Facial Streams
-            # =========================================================================
             orig_on_message = cortex.on_message
             
             def patched_on_message(ws, message):
