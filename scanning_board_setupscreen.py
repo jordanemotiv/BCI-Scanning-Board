@@ -1,11 +1,42 @@
 ### ---------------------------------------------------------------------------------- ###
 # FINAL VERSION: Single-Switch Scanning Board (Diagnostics Mode)
 # Author: Jordan Labio
-# Date: 2026-07-17
+# Date: 2026-07-21
 # Description: This is the final version of the BCI Scanning Board that operates in a "Diagnostics Mode" for real-time testing and debugging of Emotiv Cortex.
 #              It includes a setup screen, configuration options, and a live headset trace for monitoring mental commands, contact quality, and EEG quality.
 #              It is intended to help nonverbal individuals communicate more effectively using thought and facial expressions. It is user-friendly and provides visual 
 #              feedback for both the user and the caregiver.
+#               
+#               2026-07-18
+                # - Reverted UI to native vector design, removing external image dependencies.
+                # - Updated color palette, typography, and canvas treatments to align with official EMOTIV brand specifications (#2ecc71 green, #d9145a magenta, slate backdrops).
+                # - Restored standard operating system window controls and top navigation tabs for Contact Quality and EEG Quality.
+
+                # 2026-07-19
+                # - Integrated Cortex API "fac" WebSocket data stream alongside "com", "dev", and "eq" pipelines.
+                # - Mapped teeth clench ("clench") to Select and brow move to Change Speed as backup inputs.
+                # - Implemented independent facial latch state tracking to prevent 32Hz telemetry spam.
+                # - Added bottom selector checkbox "Include Facial Expressions" to toggle muscle input pipeline on or off.
+                # - Dynamic layout updates for controls instruction text based on facial selector status.
+
+                # 2026-07-20
+                # - Expanded top state tracker telemetry box to show live dual-stream status (Mental Intent and Facial EMG State).
+                # - Separated input threshold variables: Mental Threshold set to 0.35 and Facial Threshold set to 0.70.
+                # - Implemented dual-phase scanner cooldown pause (2.5s) on both row locking and column selection to prevent double-triggers.
+                # - Added independent "Include Thoughts" checkbox alongside "Include Facial Expressions" for granular pipeline control.
+
+                # 2026-07-21
+                # - Resolved EMOTIV API facial expression bug by adding string alias mapping for "frown" in addition to "furrow".
+                # - Integrated interactive hardware sensitivity tuning panel with real-time sliders for Thought Sensitivity (0.05 - 0.95) and Facial Sensitivity (0.05 - 0.95).
+                # - Refined board highlight states with EMOTIV hot-pink palette for active row scans and target intersection locks.
+
+                # 2026-07-22
+                # - Added asynchronous offline Text-to-Speech (TTS) engine integration via pyttsx3, connected to a dedicated SPEAK button and grid tile.
+                # - Added BACKSPACE control button and grid tile for single-character deletion.
+                # - Added PAUSE / RESUME scanner control button, grid tile, and hotkey (P) for user breaks.
+                # - Added Cooldown Duration slider (0.5s - 5.0s) to the hardware tuning panel.
+                # - Replaced telemetry bar text during cooldowns with a prominent visual countdown alert.
+                # - Added EXIT APP button and implemented closeEvent hard process termination (os._exit(0)) to cleanly stop background WebSocket threads and immediately release the terminal. 
 ### ---------------------------------------------------------------------------------- ###
 
 import sys
@@ -36,17 +67,33 @@ BOARD_2_ALPHA = [
     ["U", "V", "W", "X", "Y", "Z"],
     ["1", "2", "3", "4", "5", "6"],
     ["7", "8", "9", "0", "THANK YOU", "SOMETHING ELSE"],
-    ["PLEASE GUESS", "WAIT", "SPACE", "CLEAR MESSAGE", "", "FLIP OVER"]
+    ["BACKSPACE", "SPEAK", "SPACE", "PAUSE SCANNER", "CLEAR MESSAGE", "FLIP OVER"]
 ]
+
+
+# --- ASYNCHRONOUS OFFLINE TTS THREAD ---
+class TTSThread(QThread):
+    """Worker thread for Speech Synthesis so audio processing never blocks GUI loops."""
+    def __init__(self, text):
+        super().__init__()
+        self.text = text
+
+    def run(self):
+        try:
+            import pyttsx3
+            engine = pyttsx3.init()
+            engine.say(self.text)
+            engine.runAndWait()
+        except Exception as e:
+            print(f"[TTS Exception] {e}")
 
 
 # --- BACKGROUND MULTI-STREAM CORTEX THREAD WORKER ---
 class EmotivCortexWorker(QThread):
-    """Background thread that authenticates and streams commands, contact quality, and EEG quality."""
     mental_command_signal = pyqtSignal(str, float)
     contact_quality_signal = pyqtSignal(dict)  
     eeg_quality_signal = pyqtSignal(dict)      
-    facial_expression_signal = pyqtSignal(str, float, str, float) # uAct, uPow, lAct, lPow
+    facial_expression_signal = pyqtSignal(str, float, str, float)
     device_name_signal = pyqtSignal(str)       
     status_signal = pyqtSignal(str)
 
@@ -87,7 +134,6 @@ class EmotivCortexWorker(QThread):
                     msg = json.loads(message)
                     if isinstance(msg, dict):
                         
-                        # 1. Intercept Contact Quality Stream (dev)
                         if "dev" in msg:
                             raw_dev = msg["dev"]
                             if isinstance(raw_dev, list):
@@ -113,7 +159,6 @@ class EmotivCortexWorker(QThread):
                                     })
                                     self.status_signal.emit("Live Stream Active. Monitoring Diagnostics...")
                         
-                        # 2. Intercept EEG Quality Stream (eq)
                         if "eq" in msg:
                             raw_eq = msg["eq"]
                             if isinstance(raw_eq, list) and len(raw_eq) >= 5:
@@ -129,7 +174,6 @@ class EmotivCortexWorker(QThread):
                                     })
                                     self.status_signal.emit("Live Stream Active. Monitoring Diagnostics...")
                                     
-                        # 3. Intercept Facial Expression Stream (fac)
                         if "fac" in msg:
                             raw_fac = msg["fac"]
                             if isinstance(raw_fac, list) and len(raw_fac) >= 5:
@@ -145,7 +189,6 @@ class EmotivCortexWorker(QThread):
                 return orig_on_message(ws, message)
 
             cortex.on_message = patched_on_message
-            # =========================================================================
 
             def handle_data_packet(*args, **kwargs):
                 data = kwargs.get("data", args[0] if args else {})
@@ -155,9 +198,6 @@ class EmotivCortexWorker(QThread):
                     self.mental_command_signal.emit(str(data["com"][0]), float(data["com"][1]))
 
             def session_done_callback(*args, **kwargs):
-                print("\n==================================================")
-                print("[DIAGNOSTIC] Session event handshake complete!")
-                
                 if hasattr(cortex, "headset_id") and cortex.headset_id:
                     self.device_name_signal.emit(str(cortex.headset_id))
                 else:
@@ -170,13 +210,9 @@ class EmotivCortexWorker(QThread):
                     elif hasattr(cortex, "load_profile"):
                         cortex.load_profile(profile_name)
                 
-                found_method = False
                 for method_name in ["subscribe", "sub_request", "request_sub", "send_subscribe"]:
                     if hasattr(cortex, method_name):
-                        print(f"[DIAGNOSTIC] Subscribing to pipelines via: cortex.{method_name}()")
-                        print("==================================================\n")
                         getattr(cortex, method_name)(["com", "dev", "eq", "fac"])
-                        found_method = True
                         break
 
             cortex.bind(create_session_done=session_done_callback)
@@ -245,7 +281,7 @@ class HeadsetMapWidget(QWidget):
 class BCICommunicationBoard(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("BCI Scanning Engine - Diagnostics Mode")
+        self.setWindowTitle("EMOTIV BCI Assistive Communication System")
         
         self.page_container = QStackedWidget()
         self.setCentralWidget(self.page_container)
@@ -370,7 +406,7 @@ class BCICommunicationBoard(QMainWindow):
         self.speed_index = 1 
         self.composed_text = ""
 
-        # --- THRESHOLD AND POST-SELECTION COOLDOWN VARIABLES ---
+        # --- THRESHOLDS, COOLDOWN, & PAUSE STATES ---
         self.MENTAL_THRESHOLD = 0.35      
         self.FACIAL_THRESHOLD = 0.70      
         self.SELECTION_COOLDOWN_MS = 2500 
@@ -378,28 +414,80 @@ class BCICommunicationBoard(QMainWindow):
         self.latch_released = True
         self.facial_latch_released = True 
         self.in_cooldown = False          
+        self.is_paused = False            
+        
+        self.cooldown_remaining_ms = 0
+        self.cooldown_phase_label = ""
 
         self.mental_state_str = "NEUTRAL (IDLING) [Power: 0.00]"
         self.facial_state_str = "READY (IDLING)"
 
+        # =========================================================================
+        # 💬 COMPOSED MESSAGE & QUICK-ACTION CONTROL BAY
+        # =========================================================================
+        # 1. Instantiate layout container first
+        message_bar_layout = QHBoxLayout()
+
+        # 2. Display box
         self.display_box = QLabel("Composed Message: ")
-        self.display_box.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
+        self.display_box.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
         self.display_box.setStyleSheet("background-color: #1e1e24; color: #2ecc71; padding: 15px; border-radius: 8px; border: 2px solid #111115;")
         self.display_box.setWordWrap(True)
-        self.main_layout.addWidget(self.display_box)
+        message_bar_layout.addWidget(self.display_box, stretch=1)
+
+        # 3. Quick Control Sidebar Buttons
+        action_btn_layout = QVBoxLayout()
+        action_btn_layout.setSpacing(6)
+
+        self.speak_btn = QPushButton("🔊 SPEAK")
+        self.speak_btn.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        self.speak_btn.setFixedSize(130, 36)
+        self.speak_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.speak_btn.setStyleSheet("QPushButton { background-color: #d9145a; color: white; border-radius: 6px; } QPushButton:hover { background-color: #b00f46; }")
+        self.speak_btn.clicked.connect(self.speak_message)
+        action_btn_layout.addWidget(self.speak_btn)
+
+        self.backspace_btn = QPushButton("⌫ BACKSPACE")
+        self.backspace_btn.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.backspace_btn.setFixedSize(130, 30)
+        self.backspace_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.backspace_btn.setStyleSheet("QPushButton { background-color: #4f5d75; color: white; border-radius: 6px; } QPushButton:hover { background-color: #3b4758; }")
+        self.backspace_btn.clicked.connect(lambda: self.process_selection("BACKSPACE"))
+        action_btn_layout.addWidget(self.backspace_btn)
+
+        self.pause_btn = QPushButton("⏸️ PAUSE")
+        self.pause_btn.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.pause_btn.setFixedSize(130, 30)
+        self.pause_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pause_btn.setStyleSheet("QPushButton { background-color: #f39c12; color: white; border-radius: 6px; } QPushButton:hover { background-color: #d35400; }")
+        self.pause_btn.clicked.connect(lambda: self.process_selection("PAUSE SCANNER"))
+        action_btn_layout.addWidget(self.pause_btn)
+
+        self.exit_app_btn = QPushButton("✕ EXIT APP")
+        self.exit_app_btn.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.exit_app_btn.setFixedSize(130, 30)
+        self.exit_app_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.exit_app_btn.setStyleSheet("QPushButton { background-color: #e74c3c; color: white; border-radius: 6px; } QPushButton:hover { background-color: #c0392b; }")
+        self.exit_app_btn.clicked.connect(self.close)
+        action_btn_layout.addWidget(self.exit_app_btn)
+
+        # 4. Attach action bar into message layout, then attach to main layout
+        message_bar_layout.addLayout(action_btn_layout)
+        self.main_layout.addLayout(message_bar_layout)
+        # =========================================================================
 
         # Dynamic Unified Telemetry Box
         self.telemetry_label = QLabel()
         self.telemetry_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         self.main_layout.addWidget(self.telemetry_label)
 
-        # --- HARDWARE SENSITIVITY TUNING BAR ---
+        # --- HARDWARE SENSITIVITY & TIMING TUNING BAR ---
         tuning_panel = QWidget()
         tuning_panel.setStyleSheet("background-color: #ffffff; border-radius: 6px; border: 1px solid #e2e8f0;")
         tuning_layout = QHBoxLayout(tuning_panel)
         tuning_layout.setContentsMargins(15, 6, 15, 6)
 
-        # Thought Slider Control Elements
+        # 1. Thought Sensitivity Slider
         self.mental_slider_lbl = QLabel(f"Thought Sens: {self.MENTAL_THRESHOLD:.2f}")
         self.mental_slider_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.mental_slider_lbl.setStyleSheet("color: #4f5d75; border: none;")
@@ -408,14 +496,14 @@ class BCICommunicationBoard(QMainWindow):
         self.mental_slider = QSlider(Qt.Orientation.Horizontal)
         self.mental_slider.setRange(5, 95)
         self.mental_slider.setValue(int(self.MENTAL_THRESHOLD * 100))
-        self.mental_slider.setFixedWidth(140)
+        self.mental_slider.setFixedWidth(110)
         self.mental_slider.setStyleSheet("QSlider::handle:horizontal { background-color: #d9145a; border-radius: 5px; }")
         self.mental_slider.valueChanged.connect(self.handle_mental_slider_changed)
         tuning_layout.addWidget(self.mental_slider)
 
-        tuning_layout.addSpacing(30)
+        tuning_layout.addSpacing(20)
 
-        # Facial Slider Control Elements
+        # 2. Facial Sensitivity Slider
         self.facial_slider_lbl = QLabel(f"Facial Sens: {self.FACIAL_THRESHOLD:.2f}")
         self.facial_slider_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.facial_slider_lbl.setStyleSheet("color: #4f5d75; border: none;")
@@ -424,10 +512,26 @@ class BCICommunicationBoard(QMainWindow):
         self.facial_slider = QSlider(Qt.Orientation.Horizontal)
         self.facial_slider.setRange(5, 95)
         self.facial_slider.setValue(int(self.FACIAL_THRESHOLD * 100))
-        self.facial_slider.setFixedWidth(140)
+        self.facial_slider.setFixedWidth(110)
         self.facial_slider.setStyleSheet("QSlider::handle:horizontal { background-color: #d9145a; border-radius: 5px; }")
         self.facial_slider.valueChanged.connect(self.handle_facial_slider_changed)
         tuning_layout.addWidget(self.facial_slider)
+
+        tuning_layout.addSpacing(20)
+
+        # 3. Cooldown Duration Slider
+        self.cooldown_slider_lbl = QLabel(f"Cooldown: {self.SELECTION_COOLDOWN_MS/1000:.1f}s")
+        self.cooldown_slider_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.cooldown_slider_lbl.setStyleSheet("color: #4f5d75; border: none;")
+        tuning_layout.addWidget(self.cooldown_slider_lbl)
+
+        self.cooldown_slider = QSlider(Qt.Orientation.Horizontal)
+        self.cooldown_slider.setRange(5, 50) 
+        self.cooldown_slider.setValue(int(self.SELECTION_COOLDOWN_MS / 100))
+        self.cooldown_slider.setFixedWidth(110)
+        self.cooldown_slider.setStyleSheet("QSlider::handle:horizontal { background-color: #d9145a; border-radius: 5px; }")
+        self.cooldown_slider.valueChanged.connect(self.handle_cooldown_slider_changed)
+        tuning_layout.addWidget(self.cooldown_slider)
         
         tuning_layout.addStretch()
         self.main_layout.addWidget(tuning_panel)
@@ -459,7 +563,6 @@ class BCICommunicationBoard(QMainWindow):
             
         status_layout.addStretch()
 
-        # Input Source Selectors
         self.mental_selector = QCheckBox("Include Thoughts")
         self.mental_selector.setChecked(True)
         self.mental_selector.setFont(QFont("Segoe UI", 10, QFont.Weight.Medium))
@@ -479,7 +582,7 @@ class BCICommunicationBoard(QMainWindow):
         self.keyboard_network_status_label.setStyleSheet("color: #2ecc71; padding-right: 10px;")
         status_layout.addWidget(self.keyboard_network_status_label)
         
-        self.controls_label = QLabel("Push/Clench = SELECT  •  Pull/Frown = SPEED")
+        self.controls_label = QLabel("Push/Clench = SELECT  •  Pull/Furrow = SPEED")
         self.controls_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         self.controls_label.setStyleSheet("color: #4f5d75; padding: 5px;")
         status_layout.addWidget(self.controls_label)
@@ -487,6 +590,9 @@ class BCICommunicationBoard(QMainWindow):
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.advance_scanner)
+
+        self.cooldown_ticker = QTimer(self)
+        self.cooldown_ticker.timeout.connect(self.tick_cooldown_countdown)
 
         self.update_telemetry_box("neutral")
 
@@ -500,7 +606,15 @@ class BCICommunicationBoard(QMainWindow):
         self.facial_slider_lbl.setText(f"Facial Sens: {self.FACIAL_THRESHOLD:.2f}")
         self.update_telemetry_box("neutral")
 
+    def handle_cooldown_slider_changed(self, value):
+        self.SELECTION_COOLDOWN_MS = value * 100
+        self.cooldown_slider_lbl.setText(f"Cooldown: {self.SELECTION_COOLDOWN_MS/1000:.1f}s")
+
     def update_telemetry_box(self, style_preset="neutral"):
+        # Guard: If system is currently on cooldown, keep the prominent countdown bar visible
+        if self.in_cooldown:
+            return
+
         mental_part = self.mental_state_str if self.mental_selector.isChecked() else "DISABLED"
         text = f"BCI FRAMEWORK — MENTAL INTENT: {mental_part}"
         
@@ -527,11 +641,11 @@ class BCICommunicationBoard(QMainWindow):
         f_on = self.facial_selector.isChecked()
 
         if m_on and f_on:
-            self.controls_label.setText("Push/Clench = SELECT  •  Pull/Frown = SPEED")
+            self.controls_label.setText("Push/Clench = SELECT  •  Pull/Furrow = SPEED")
         elif m_on and not f_on:
             self.controls_label.setText("Push = SELECT  •  Pull = SPEED")
         elif not m_on and f_on:
-            self.controls_label.setText("Clench = SELECT  •  Frown = SPEED")
+            self.controls_label.setText("Clench = SELECT  •  Furrow = SPEED")
         else:
             self.controls_label.setText("ALL BCI OVERRIDES DISABLED")
             
@@ -634,7 +748,7 @@ class BCICommunicationBoard(QMainWindow):
             self.setup_network_log.setStyleSheet("color: #f39c12; font-weight: bold;")
 
     def route_bci_command(self, command, power):
-        if self.page_container.currentIndex() != 1 or self.in_cooldown:
+        if self.page_container.currentIndex() != 1 or self.in_cooldown or self.is_paused:
             return
 
         if not self.mental_selector.isChecked():
@@ -671,17 +785,16 @@ class BCICommunicationBoard(QMainWindow):
             self.trigger_speed_change()
 
     def route_facial_command(self, u_act, u_pow, l_act, l_pow):
-        if self.page_container.currentIndex() != 1 or self.in_cooldown:
+        if self.page_container.currentIndex() != 1 or self.in_cooldown or self.is_paused:
             return
 
         if not self.facial_selector.isChecked():
             return
 
         clench_active = (l_act.strip().lower() == "clench" and l_pow >= self.FACIAL_THRESHOLD)
-        
-        frown_active = (u_act.strip().lower() == "frown" and u_pow >= self.FACIAL_THRESHOLD)
+        furrow_active = (u_act.strip().lower() in ["frown", "furrow"] and u_pow >= self.FACIAL_THRESHOLD)
 
-        if not clench_active and not frown_active:
+        if not clench_active and not furrow_active:
             self.facial_latch_released = True
             if self.facial_state_str != "READY (IDLING)":
                 self.facial_state_str = "READY (IDLING)"
@@ -697,13 +810,14 @@ class BCICommunicationBoard(QMainWindow):
             self.facial_latch_released = False
             self.trigger_select_event()
             
-        elif frown_active:
-            self.facial_state_str = f"TRIGGERED FROWN (SPEED BACKUP)! [Power: {u_pow:.2f}]"
+        elif furrow_active:
+            self.facial_state_str = f"TRIGGERED FURROW (SPEED BACKUP)! [Power: {u_pow:.2f}]"
             self.update_telemetry_box("facial_trigger")
             self.facial_latch_released = False
             self.trigger_speed_change()
 
     def advance_scanner(self):
+        if self.is_paused: return
         if self.scanning_state == self.SCAN_ROWS:
             self.active_row = (self.active_row + 1) % len(self.current_matrix)
         elif self.scanning_state == self.SCAN_COLS:
@@ -716,12 +830,16 @@ class BCICommunicationBoard(QMainWindow):
                 widget = self.grid_widgets[r][c]
                 if not widget: continue
                 
-                is_flip_button = (widget.text() == "FLIP OVER")
+                text = widget.text()
+                is_flip_button = (text == "FLIP OVER")
                 is_starter_col = (self.current_board_name == "PHRASES" and c == 0)
+                is_special_action = (text in ["BACKSPACE", "SPEAK", "PAUSE SCANNER", "CLEAR MESSAGE"])
                 
                 base_style = "border: 1px solid #e2e8f0; background-color: #ffffff; color: #1e293b; border-radius: 6px; padding: 5px;"
                 if is_starter_col:
                     base_style = "border: 1px dashed #4f5d75; background-color: #f1f5f9; color: #4f5d75; font-weight: bold; border-radius: 6px; padding: 5px;"
+                elif is_special_action:
+                    base_style = "border: 1px solid #cbd5e1; background-color: #f1f5f9; color: #0f172a; font-weight: bold; border-radius: 6px; padding: 5px;"
                 elif is_flip_button:
                     base_style = "border: 1px solid #cbd5e1; background-color: #f8fafc; color: #d9145a; font-weight: bold; border-radius: 6px; padding: 5px;"
 
@@ -746,49 +864,72 @@ class BCICommunicationBoard(QMainWindow):
                 self.process_contact_quality({"AF3": 4, "AF4": 4, "T7": 4, "T8": 4, "Pz": 4})
                 self.process_eeg_quality({"AF3": 4, "AF4": 4, "T7": 4, "T8": 4, "Pz": 4})
             else:
-                if not self.in_cooldown:
+                if not self.in_cooldown and not self.is_paused:
                     self.trigger_select_event()
         elif event.key() == Qt.Key.Key_S and self.page_container.currentIndex() == 1:
-            if not self.in_cooldown:
+            if not self.in_cooldown and not self.is_paused:
                 self.trigger_speed_change()
+        elif event.key() == Qt.Key.Key_P and self.page_container.currentIndex() == 1:
+            self.process_selection("PAUSE SCANNER")
 
+    # =========================================================================
+    # ⏱️ STATE TRACKER OVERRIDE COOLDOWN CONTROLLER
+    # =========================================================================
     def trigger_select_event(self):
         if self.scanning_state == self.SCAN_ROWS:
             self.scanning_state = self.SCAN_COLS
             self.active_col = 0
             self.update_ui_highlights()
-            
-            self.in_cooldown = True
-            self.timer.stop() 
-            self.keyboard_network_status_label.setText("BCI: Row Locked. Relax Mind/Face...")
-            self.keyboard_network_status_label.setStyleSheet("color: #d9145a; font-weight: bold;")
-            
-            QTimer.singleShot(self.SELECTION_COOLDOWN_MS, self.end_selection_cooldown)
+            self.start_cooldown_phase("Row Locked")
 
         elif self.scanning_state == self.SCAN_COLS:
             selected_text = self.current_matrix[self.active_row][self.active_col]
             self.process_selection(selected_text)
             
-            self.in_cooldown = True
-            self.timer.stop() 
-            self.keyboard_network_status_label.setText("BCI: Letter Selected. Relax Mind/Face...")
-            self.keyboard_network_status_label.setStyleSheet("color: #d9145a; font-weight: bold;")
-            
             self.scanning_state = self.SCAN_ROWS
             self.active_row = 0
             self.update_ui_highlights()
-            
-            QTimer.singleShot(self.SELECTION_COOLDOWN_MS, self.end_selection_cooldown)
+            self.start_cooldown_phase("Selection Complete")
+
+    def start_cooldown_phase(self, label_text):
+        self.in_cooldown = True
+        self.timer.stop() 
+        self.cooldown_phase_label = label_text
+        self.cooldown_remaining_ms = self.SELECTION_COOLDOWN_MS
+        
+        self.render_cooldown_in_state_tracker()
+        self.cooldown_ticker.start(100) # Ticks every 100ms for high-frequency smooth updates
+
+    def tick_cooldown_countdown(self):
+        self.cooldown_remaining_ms -= 100
+        if self.cooldown_remaining_ms <= 0:
+            self.cooldown_ticker.stop()
+            self.end_selection_cooldown()
+        else:
+            self.render_cooldown_in_state_tracker()
+
+    def render_cooldown_in_state_tracker(self):
+        """Replaces standard telemetry text with a highly visible cooldown banner."""
+        sec_str = f"{self.cooldown_remaining_ms/1000:.1f}"
+        text = f"⏳ BCI PAUSE — [{self.cooldown_phase_label.upper()}]  |  RESUMING IN {sec_str}s  (RELAX MIND / FACE)"
+        
+        self.telemetry_label.setText(text)
+        self.telemetry_label.setStyleSheet("background-color: #d9145a; color: #ffffff; padding: 10px; border-radius: 6px; margin-top: 5px; border: 1px solid #b00f46; font-size: 12px; font-weight: bold;")
+        
+        self.keyboard_network_status_label.setText(f"BCI: Cooldown Active ({sec_str}s)...")
+        self.keyboard_network_status_label.setStyleSheet("color: #d9145a; font-weight: bold;")
 
     def end_selection_cooldown(self):
         self.in_cooldown = False
         self.latch_released = True
         self.facial_latch_released = True
         
-        self.keyboard_network_status_label.setText("BCI: Scanner Active.")
-        self.keyboard_network_status_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
-        
-        self.timer.start(self.scan_intervals[self.speed_index])
+        if not self.is_paused:
+            self.keyboard_network_status_label.setText("BCI: Scanner Active.")
+            self.keyboard_network_status_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
+            self.timer.start(self.scan_intervals[self.speed_index])
+            self.update_telemetry_box("neutral")
+            
         self.update_ui_highlights()
 
     def trigger_speed_change(self):
@@ -803,19 +944,59 @@ class BCICommunicationBoard(QMainWindow):
             else:
                 lbl.setStyleSheet("background-color: #e2e8f0; color: #475569; border-radius: 4px;")
 
+    def speak_message(self):
+        text_to_speak = self.composed_text.strip()
+        if text_to_speak:
+            self.tts_worker = TTSThread(text_to_speak)
+            self.tts_worker.start()
+
     def process_selection(self, text):
         if not text or text.strip() == "": return
+
         if text == "FLIP OVER":
             self.current_board_name = "PHRASES" if self.current_board_name == "ALPHA" else "ALPHA"
             self.current_matrix = self.boards[self.current_board_name]
             self.build_board_grid()
             self.update_status_bar()
             return
-        if text == "SPACE":
+            
+        elif text == "SPEAK":
+            self.speak_message()
+            return
+
+        elif text == "BACKSPACE":
+            if self.composed_text:
+                self.composed_text = self.composed_text[:-1]
+            self.display_box.setText(f"Composed Message: {self.composed_text}")
+            return
+
+        elif text == "PAUSE SCANNER":
+            self.is_paused = not self.is_paused
+            if self.is_paused:
+                self.timer.stop()
+                self.pause_btn.setText("▶️ RESUME")
+                self.pause_btn.setStyleSheet("QPushButton { background-color: #2ecc71; color: white; border-radius: 6px; }")
+                self.keyboard_network_status_label.setText("BCI: Scanner PAUSED.")
+                self.keyboard_network_status_label.setStyleSheet("color: #f39c12; font-weight: bold;")
+                self.mental_state_str = "SCANNER PAUSED"
+                self.facial_state_str = "SCANNER PAUSED"
+                self.update_telemetry_box("locked")
+            else:
+                self.pause_btn.setText("⏸️ PAUSE")
+                self.pause_btn.setStyleSheet("QPushButton { background-color: #f39c12; color: white; border-radius: 6px; }")
+                self.keyboard_network_status_label.setText("BCI: Scanner Active.")
+                self.keyboard_network_status_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
+                self.mental_state_str = "NEUTRAL (IDLING) [Power: 0.00]"
+                self.facial_state_str = "READY (IDLING)"
+                self.update_telemetry_box("neutral")
+                self.timer.start(self.scan_intervals[self.speed_index])
+            return
+
+        elif text == "SPACE":
             self.composed_text += " "
         elif text == "CLEAR MESSAGE":
             self.composed_text = ""
-        elif text == "WAIT" or text == "PLEASE GUESS":
+        elif text in ["WAIT", "PLEASE GUESS"]:
             self.composed_text += f" [{text}] "
         else:
             if len(text) == 1 or text == "QU":
@@ -824,7 +1005,23 @@ class BCICommunicationBoard(QMainWindow):
                 if self.composed_text and not self.composed_text.endswith(" "):
                     self.composed_text += " "
                 self.composed_text += text + " "
+                
         self.display_box.setText(f"Composed Message: {self.composed_text}")
+
+    def closeEvent(self, event):
+        """Immediately terminates all background WebSocket threads and releases the terminal."""
+        print("[SYSTEM] Shutting down application...")
+        
+        # Stop UI timers
+        if hasattr(self, 'timer'):
+            self.timer.stop()
+        if hasattr(self, 'cooldown_ticker'):
+            self.cooldown_ticker.stop()
+        event.accept()
+        QApplication.quit()
+        # Hard-kill the Python process
+        import os
+        os._exit(0)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
