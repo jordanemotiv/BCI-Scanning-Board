@@ -1,63 +1,65 @@
 ### ---------------------------------------------------------------------------------- ###
-# LEGACY VERSION: Single-Switch Scanning Board (Diagnostics Mode)
+# FINAL VERSION: Single-Switch Scanning Board (Diagnostics Mode) + Config File Integration
 # Author: Jordan Labio
 # Date: 2026-07-21
-# Description: This is the final version of the BCI Scanning Board that operates in a "Diagnostics Mode" for real-time testing and debugging of Emotiv Cortex.
-#              It includes a setup screen, configuration options, and a live headset trace for monitoring mental commands, contact quality, and EEG quality.
-#              It is intended to help nonverbal individuals communicate more effectively using thought and facial expressions. It is user-friendly and provides visual 
-#              feedback for both the user and the caregiver.
+# Description: This is the final version of the BCI Scanning Board but adds a configuration file integration feature, removing the need for a config.json file. 
 #               
-#               2026-07-18
-                # - Reverted UI to native vector design, removing external image dependencies.
-                # - Updated color palette, typography, and canvas treatments to align with official EMOTIV brand specifications (#2ecc71 green, #d9145a magenta, slate backdrops).
-                # - Restored standard operating system window controls and top navigation tabs for Contact Quality and EEG Quality.
-
-                # 2026-07-19
-                # - Integrated Cortex API "fac" WebSocket data stream alongside "com", "dev", and "eq" pipelines.
-                # - Mapped teeth clench ("clench") to Select and brow move to Change Speed as backup inputs.
-                # - Implemented independent facial latch state tracking to prevent 32Hz telemetry spam.
-                # - Added bottom selector checkbox "Include Facial Expressions" to toggle muscle input pipeline on or off.
-                # - Dynamic layout updates for controls instruction text based on facial selector status.
-
-                # 2026-07-20
-                # - Expanded top state tracker telemetry box to show live dual-stream status (Mental Intent and Facial EMG State).
-                # - Separated input threshold variables: Mental Threshold set to 0.35 and Facial Threshold set to 0.70.
-                # - Implemented dual-phase scanner cooldown pause (2.5s) on both row locking and column selection to prevent double-triggers.
-                # - Added independent "Include Thoughts" checkbox alongside "Include Facial Expressions" for granular pipeline control.
-
-                # 2026-07-21
-                # - Resolved EMOTIV API facial expression bug by adding string alias mapping for "frown" in addition to "furrow".
-                # - Integrated interactive hardware sensitivity tuning panel with real-time sliders for Thought Sensitivity (0.05 - 0.95) and Facial Sensitivity (0.05 - 0.95).
-                # - Refined board highlight states with EMOTIV hot-pink palette for active row scans and target intersection locks.
-
-                # 2026-07-22
-                # - Added asynchronous offline Text-to-Speech (TTS) engine integration via pyttsx3, connected to a dedicated SPEAK button and grid tile.
-                # - Added BACKSPACE control button and grid tile for single-character deletion.
-                # - Added PAUSE / RESUME scanner control button, grid tile, and hotkey (P) for user breaks.
-                # - Added Cooldown Duration slider (0.5s - 5.0s) to the hardware tuning panel.
-                # - Replaced telemetry bar text during cooldowns with a prominent visual countdown alert.
-                # - Added EXIT APP button and implemented closeEvent hard process termination (os._exit(0)) to cleanly stop background WebSocket threads and immediately release the terminal. 
+#               2026-07-23
+                # - Added CortexCredentialsDialog class, which acts as a configurable settings file dialog for entering EMOTIV Cortex API credentials and Profile Name.
+                # - Added a settings menu to include custom phrases.
+                # - Added realtime battery and signal monitoring to the device screen.
 ### ---------------------------------------------------------------------------------- ###
-
 import sys
 import json
 import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QGridLayout, 
                              QLabel, QVBoxLayout, QHBoxLayout, QPushButton, 
-                             QStackedWidget, QCheckBox, QSlider)
+                             QStackedWidget, QCheckBox, QSlider, QDialog, 
+                             QLineEdit, QFormLayout, QMessageBox, QListWidget, 
+                             QListWidgetItem, QInputDialog)
 from PyQt6.QtCore import QTimer, Qt, QThread, pyqtSignal, QPoint
 from PyQt6.QtGui import QFont, QPainter, QColor, QPen
 
-# --- GRID LAYOUT MATRICES ---
-BOARD_1_PHRASES = [
-    ["I HAVE TO TELL YOU SOMETHING", "I LOVE YOU", "YES", "NO", "THANK YOU", "YOU'RE WELCOME", "HELLO"],
-    ["I AM", "HAPPY", "SAD", "TIRED", "HOT", "COLD", "EXCITED"],
-    ["I HAVE A PROBLEM", "PAIN", "CRAMP", "ITCH", "STOP", "SICK", "UNCOMFORTABLE"],
-    ["I NEED", "SUCTION", "MEDICINE", "BATHE", "BATHROOM", "BED", "BREATHING MACHINE"],
-    ["MASSAGE", "LEG", "ARM", "HIPS", "HEAD", "LEFT", "RIGHT"],
-    ["I WANT", "FOOD", "DRINK", "TV", "PHONE", "COMPUTER", "HELP"],
-    ["TO GO", "TO CALL", "A HUG", "A KISS", "COMPANY", "FLIP OVER", "SOMETHING ELSE"]
+# --- DEFAULT MATRIX PHRASES ---
+DEFAULT_PHRASES_LIST = [
+    "I HAVE TO TELL YOU SOMETHING", "I LOVE YOU", "YES", "NO", "THANK YOU", "YOU'RE WELCOME", "HELLO",
+    "I AM", "HAPPY", "SAD", "TIRED", "HOT", "COLD", "EXCITED",
+    "I HAVE A PROBLEM", "PAIN", "CRAMP", "ITCH", "STOP", "SICK", "UNCOMFORTABLE",
+    "I NEED", "SUCTION", "MEDICINE", "BATHE", "BATHROOM", "BED", "BREATHING MACHINE",
+    "MASSAGE", "LEG", "ARM", "HIPS", "HEAD", "LEFT", "RIGHT",
+    "I WANT", "FOOD", "DRINK", "TV", "PHONE", "COMPUTER", "HELP",
+    "TO GO", "TO CALL", "A HUG", "A KISS", "COMPANY", "FLIP OVER", "SOMETHING ELSE"
 ]
+
+def load_phrases_from_file():
+    """Loads phrases from phrases.json or generates defaults."""
+    if os.path.exists("phrases.json"):
+        try:
+            with open("phrases.json", "r") as f:
+                phrases = json.load(f)
+                if isinstance(phrases, list) and len(phrases) > 0:
+                    return phrases
+        except Exception as e:
+            print(f"[Phrases] Error loading phrases.json: {e}")
+    return DEFAULT_PHRASES_LIST[:]
+
+def build_phrase_matrix(phrases_list):
+    """Chunks a list of phrases into a clean 7x7 grid for scanning."""
+    items = phrases_list[:]
+    # Ensure FLIP OVER is always present at the end of matrix
+    if "FLIP OVER" not in items:
+        items.append("FLIP OVER")
+        
+    matrix = []
+    col_count = 7
+    for i in range(0, len(items), col_count):
+        row = items[i:i+col_count]
+        while len(row) < col_count:
+            row.append("")
+        matrix.append(row)
+    return matrix
+
+BOARD_1_PHRASES = build_phrase_matrix(load_phrases_from_file())
 
 BOARD_2_ALPHA = [
     ["A", "B", "C", "D", "YES", "NO"],
@@ -71,9 +73,228 @@ BOARD_2_ALPHA = [
 ]
 
 
+# --- CAREGIVER CUSTOM PHRASE MANAGER DIALOG ---
+class PhraseManagerDialog(QDialog):
+    """Modal dialog allowing caregivers to add, edit, or delete board phrases."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Caregiver Custom Phrase Manager")
+        self.setFixedSize(520, 420)
+        
+        self.setStyleSheet("""
+            QDialog { background-color: #ffffff; font-family: 'Segoe UI'; }
+            QLabel { color: #1e293b; font-size: 11px; font-weight: bold; }
+            QListWidget {
+                color: #0f172a; background-color: #f8fafc;
+                border: 1px solid #cbd5e1; border-radius: 6px;
+                padding: 6px; font-size: 11px; font-weight: bold;
+            }
+            QListWidget::item:selected {
+                background-color: #d9145a; color: #ffffff; border-radius: 4px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        header_lbl = QLabel("📝 Manage Communication Board Phrases")
+        header_lbl.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        header_lbl.setStyleSheet("color: #d9145a; margin-bottom: 5px;")
+        layout.addWidget(header_lbl)
+
+        sub_lbl = QLabel("Caregivers can add daily requests, family names, or custom phrases below.")
+        sub_lbl.setFont(QFont("Segoe UI", 9))
+        sub_lbl.setStyleSheet("color: #64748b; margin-bottom: 10px;")
+        layout.addWidget(sub_lbl)
+
+        body_layout = QHBoxLayout()
+        self.phrase_list_widget = QListWidget()
+        body_layout.addWidget(self.phrase_list_widget, stretch=1)
+
+        btn_column = QVBoxLayout()
+        btn_column.setSpacing(8)
+
+        add_btn = QPushButton("+ Add Phrase")
+        add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_btn.setStyleSheet("QPushButton { padding: 8px; background-color: #2ecc71; color: white; border-radius: 4px; font-weight: bold; } QPushButton:hover { background-color: #27ae60; }")
+        add_btn.clicked.connect(self.add_phrase)
+        btn_column.addWidget(add_btn)
+
+        edit_btn = QPushButton("✏️ Edit Selected")
+        edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        edit_btn.setStyleSheet("QPushButton { padding: 8px; background-color: #4f5d75; color: white; border-radius: 4px; font-weight: bold; } QPushButton:hover { background-color: #3b4758; }")
+        edit_btn.clicked.connect(self.edit_phrase)
+        btn_column.addWidget(edit_btn)
+
+        delete_btn = QPushButton("🗑️ Remove")
+        delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        delete_btn.setStyleSheet("QPushButton { padding: 8px; background-color: #e74c3c; color: white; border-radius: 4px; font-weight: bold; } QPushButton:hover { background-color: #c0392b; }")
+        delete_btn.clicked.connect(self.delete_phrase)
+        btn_column.addWidget(delete_btn)
+
+        btn_column.addStretch()
+        body_layout.addLayout(btn_column)
+        layout.addLayout(body_layout)
+
+        layout.addSpacing(10)
+        footer_btn_layout = QHBoxLayout()
+        footer_btn_layout.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setStyleSheet("QPushButton { padding: 8px 16px; border: 1px solid #cbd5e1; border-radius: 4px; background: #f1f5f9; color: #334155; font-weight: bold; }")
+        cancel_btn.clicked.connect(self.reject)
+        footer_btn_layout.addWidget(cancel_btn)
+
+        save_btn = QPushButton("Save & Reload Board")
+        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save_btn.setStyleSheet("QPushButton { padding: 8px 20px; background-color: #d9145a; color: white; border-radius: 4px; font-weight: bold; } QPushButton:hover { background-color: #b00f46; }")
+        save_btn.clicked.connect(self.save_phrases)
+        footer_btn_layout.addWidget(save_btn)
+
+        layout.addLayout(footer_btn_layout)
+
+        self.populate_phrase_list()
+
+    def populate_phrase_list(self):
+        self.phrase_list_widget.clear()
+        phrases = load_phrases_from_file()
+        for p in phrases:
+            if p != "FLIP OVER":
+                self.phrase_list_widget.addItem(p)
+
+    def add_phrase(self):
+        text, ok = QInputDialog.getText(self, "Add Phrase", "Enter new word or phrase:")
+        if ok and text.strip():
+            clean_text = text.strip().upper()
+            self.phrase_list_widget.addItem(clean_text)
+
+    def edit_phrase(self):
+        current_item = self.phrase_list_widget.currentItem()
+        if not current_item:
+            return
+        text, ok = QInputDialog.getText(self, "Edit Phrase", "Update phrase:", QLineEdit.EchoMode.Normal, current_item.text())
+        if ok and text.strip():
+            current_item.setText(text.strip().upper())
+
+    def delete_phrase(self):
+        row = self.phrase_list_widget.currentRow()
+        if row >= 0:
+            self.phrase_list_widget.takeItem(row)
+
+    def save_phrases(self):
+        phrases = [self.phrase_list_widget.item(i).text() for i in range(self.phrase_list_widget.count())]
+        if "FLIP OVER" not in phrases:
+            phrases.append("FLIP OVER")
+        try:
+            with open("phrases.json", "w") as f:
+                json.dump(phrases, f, indent=4)
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Could not save phrases.json:\n{e}")
+
+
+# --- GUI CREDENTIALS & PROFILE SETUP DIALOG ---
+class CortexCredentialsDialog(QDialog):
+    """Modal dialog for entering EMOTIV Cortex API credentials and Profile Name."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("EMOTIV Cortex API Configuration")
+        self.setFixedSize(480, 280)
+        
+        self.setStyleSheet("""
+            QDialog { background-color: #ffffff; font-family: 'Segoe UI'; }
+            QLabel { color: #1e293b; font-size: 11px; font-weight: bold; }
+            QLineEdit {
+                color: #0f172a; background-color: #f8fafc; padding: 6px;
+                border: 1px solid #cbd5e1; border-radius: 4px; font-size: 11px;
+            }
+            QLineEdit:focus { border: 1px solid #d9145a; background-color: #ffffff; }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(25, 20, 25, 20)
+
+        header_lbl = QLabel("EMOTIV Cortex API & Profile Setup")
+        header_lbl.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        header_lbl.setStyleSheet("color: #d9145a; margin-bottom: 5px;")
+        layout.addWidget(header_lbl)
+
+        form_layout = QFormLayout()
+        form_layout.setSpacing(12)
+
+        self.client_id_input = QLineEdit()
+        self.client_id_input.setPlaceholderText("Paste Client ID here...")
+        form_layout.addRow("Client ID:", self.client_id_input)
+
+        self.client_secret_input = QLineEdit()
+        self.client_secret_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.client_secret_input.setPlaceholderText("Paste Client Secret here...")
+        form_layout.addRow("Client Secret:", self.client_secret_input)
+
+        self.profile_name_input = QLineEdit()
+        self.profile_name_input.setPlaceholderText("e.g. John_Insight")
+        form_layout.addRow("Profile Name:", self.profile_name_input)
+
+        layout.addLayout(form_layout)
+        layout.addSpacing(15)
+
+        self.load_existing_config()
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setStyleSheet("QPushButton { padding: 8px 16px; border: 1px solid #cbd5e1; border-radius: 4px; background: #f1f5f9; color: #334155; font-weight: bold; }")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+
+        save_btn = QPushButton("Save & Connect")
+        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save_btn.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        save_btn.setStyleSheet("QPushButton { padding: 8px 20px; background-color: #d9145a; color: white; border-radius: 4px; font-weight: bold; } QPushButton:hover { background-color: #b00f46; }")
+        save_btn.clicked.connect(self.save_config)
+        btn_layout.addWidget(save_btn)
+
+        layout.addLayout(btn_layout)
+
+    def load_existing_config(self):
+        if os.path.exists("config.json"):
+            try:
+                with open("config.json", "r") as f:
+                    cfg = json.load(f)
+                    self.client_id_input.setText(cfg.get("cortex_client_id", cfg.get("client_id", "")))
+                    self.client_secret_input.setText(cfg.get("cortex_client_secret", cfg.get("client_secret", "")))
+                    self.profile_name_input.setText(cfg.get("profile_name", ""))
+            except Exception:
+                pass
+
+    def save_config(self):
+        client_id = self.client_id_input.text().strip()
+        client_secret = self.client_secret_input.text().strip()
+        profile_name = self.profile_name_input.text().strip()
+
+        if not client_id or not client_secret:
+            QMessageBox.warning(self, "Missing Credentials", "Client ID and Client Secret are required.")
+            return
+
+        cfg = {
+            "cortex_client_id": client_id,
+            "cortex_client_secret": client_secret,
+            "profile_name": profile_name
+        }
+
+        try:
+            with open("config.json", "w") as f:
+                json.dump(cfg, f, indent=4)
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Could not save config.json:\n{e}")
+
+
 # --- ASYNCHRONOUS OFFLINE TTS THREAD ---
 class TTSThread(QThread):
-    """Worker thread for Speech Synthesis so audio processing never blocks GUI loops."""
     def __init__(self, text):
         super().__init__()
         self.text = text
@@ -94,6 +315,7 @@ class EmotivCortexWorker(QThread):
     contact_quality_signal = pyqtSignal(dict)  
     eeg_quality_signal = pyqtSignal(dict)      
     facial_expression_signal = pyqtSignal(str, float, str, float)
+    device_diagnostics_signal = pyqtSignal(int, int) # battery_pct, signal_pct
     device_name_signal = pyqtSignal(str)       
     status_signal = pyqtSignal(str)
 
@@ -115,7 +337,7 @@ class EmotivCortexWorker(QThread):
                 self.status_signal.emit(f"Error loading config.json: {e}")
 
         if not client_id or not client_secret:
-            self.status_signal.emit("API Credentials Missing in config.json.")
+            self.status_signal.emit("API Credentials Missing in config.json. Click 'API Settings' to configure.")
             return
 
         try:
@@ -133,22 +355,29 @@ class EmotivCortexWorker(QThread):
                 try:
                     msg = json.loads(message)
                     if isinstance(msg, dict):
-                        
+                        # Intercept dev packet for battery and signal diagnostics
                         if "dev" in msg:
                             raw_dev = msg["dev"]
-                            if isinstance(raw_dev, list):
+                            if isinstance(raw_dev, list) and len(raw_dev) >= 2:
+                                # Extract Battery % & Signal Strength
+                                batt_pct = 100
+                                sig_pct = 100
+                                if len(raw_dev) >= 4 and isinstance(raw_dev[3], (int, float)):
+                                    batt_pct = int(raw_dev[3])
+                                elif isinstance(raw_dev[0], (int, float)):
+                                    batt_pct = int((raw_dev[0] / 4.0) * 100)
+                                    
+                                if isinstance(raw_dev[1], (int, float)):
+                                    sig_pct = int(raw_dev[1] * 50) if raw_dev[1] <= 2 else int(raw_dev[1])
+
+                                self.device_diagnostics_signal.emit(batt_pct, sig_pct)
+
                                 nested_list = None
                                 for item in raw_dev:
                                     if isinstance(item, list):
                                         nested_list = item
                                         break
-                                
-                                if nested_list and len(nested_list) >= 5:
-                                    numbers = nested_list
-                                else:
-                                    idx = 2 if len(raw_dev) == 8 else 0
-                                    numbers = raw_dev[idx:]
-
+                                numbers = nested_list if nested_list and len(nested_list) >= 5 else raw_dev[2 if len(raw_dev) == 8 else 0:]
                                 if len(numbers) >= 5:
                                     self.contact_quality_signal.emit({
                                         "AF3": int(numbers[0]),
@@ -161,9 +390,13 @@ class EmotivCortexWorker(QThread):
                         
                         if "eq" in msg:
                             raw_eq = msg["eq"]
-                            if isinstance(raw_eq, list) and len(raw_eq) >= 5:
-                                eq_idx = 3 if len(raw_eq) == 8 else 0
-                                numbers = raw_eq[eq_idx:]
+                            if isinstance(raw_eq, list) and len(raw_eq) >= 3:
+                                batt_pct = int(raw_eq[0]) if isinstance(raw_eq[0], (int, float)) else 100
+                                srq = float(raw_eq[2]) if isinstance(raw_eq[2], (int, float)) else 1.0
+                                sig_pct = int(srq * 100) if srq >= 0 else 0
+                                self.device_diagnostics_signal.emit(batt_pct, sig_pct)
+
+                                numbers = raw_eq[3 if len(raw_eq) == 8 else 0:]
                                 if len(numbers) >= 5:
                                     self.eeg_quality_signal.emit({
                                         "AF3": int(numbers[0]),
@@ -183,7 +416,7 @@ class EmotivCortexWorker(QThread):
                                 l_pow = float(raw_fac[4])
                                 self.facial_expression_signal.emit(u_act, u_pow, l_act, l_pow)
                                 
-                except Exception as e:
+                except Exception:
                     pass
                 
                 return orig_on_message(ws, message)
@@ -294,14 +527,57 @@ class BCICommunicationBoard(QMainWindow):
         self.page_container.addWidget(self.keyboard_page)
         self.page_container.setCurrentIndex(0) 
 
+        self.cortex_thread = None
+        self.start_cortex_worker()
+
+        QTimer.singleShot(500, self.check_credentials_on_launch)
+
+    def closeEvent(self, event):
+        print("[SYSTEM] Shutting down application...")
+        if hasattr(self, 'timer'):
+            self.timer.stop()
+        if hasattr(self, 'cooldown_ticker'):
+            self.cooldown_ticker.stop()
+
+        event.accept()
+        QApplication.quit()
+
+        import os
+        os._exit(0)
+
+    def start_cortex_worker(self):
+        if self.cortex_thread and self.cortex_thread.isRunning():
+            self.cortex_thread.quit()
+            self.cortex_thread.wait(500)
+
         self.cortex_thread = EmotivCortexWorker()
         self.cortex_thread.status_signal.connect(self.display_network_logs)
         self.cortex_thread.device_name_signal.connect(self.update_hardware_banner)
+        self.cortex_thread.device_diagnostics_signal.connect(self.update_device_diagnostics)
         self.cortex_thread.contact_quality_signal.connect(self.process_contact_quality)
         self.cortex_thread.eeg_quality_signal.connect(self.process_eeg_quality)
         self.cortex_thread.mental_command_signal.connect(self.route_bci_command)
         self.cortex_thread.facial_expression_signal.connect(self.route_facial_command)
         self.cortex_thread.start()
+
+    def check_credentials_on_launch(self):
+        if not os.path.exists("config.json"):
+            self.open_credentials_dialog()
+
+    def open_credentials_dialog(self):
+        dlg = CortexCredentialsDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.start_cortex_worker()
+
+    def open_phrase_manager_dialog(self):
+        dlg = PhraseManagerDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            global BOARD_1_PHRASES
+            BOARD_1_PHRASES = build_phrase_matrix(load_phrases_from_file())
+            self.boards["PHRASES"] = BOARD_1_PHRASES
+            if self.current_board_name == "PHRASES":
+                self.current_matrix = BOARD_1_PHRASES
+                self.build_board_grid()
 
     def build_preflight_screen(self):
         self.setup_page = QWidget()
@@ -326,6 +602,23 @@ class BCICommunicationBoard(QMainWindow):
         nav_header.addWidget(self.eq_tab_btn)
         
         nav_header.addStretch()
+
+        # 📝 Custom Phrase Manager Button
+        self.phrases_btn = QPushButton("📝 Phrases")
+        self.phrases_btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.phrases_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.phrases_btn.setStyleSheet("QPushButton { background-color: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; padding: 6px 12px; border-radius: 4px; margin-right: 5px; } QPushButton:hover { background-color: #e2e8f0; }")
+        self.phrases_btn.clicked.connect(self.open_phrase_manager_dialog)
+        nav_header.addWidget(self.phrases_btn)
+
+        # ⚙️ API Configuration Button
+        self.config_btn = QPushButton("⚙️ API Settings")
+        self.config_btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.config_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.config_btn.setStyleSheet("QPushButton { background-color: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; padding: 6px 12px; border-radius: 4px; } QPushButton:hover { background-color: #e2e8f0; }")
+        self.config_btn.clicked.connect(self.open_credentials_dialog)
+        nav_header.addWidget(self.config_btn)
+
         layout.addLayout(nav_header)
 
         body_layout = QHBoxLayout()
@@ -422,20 +715,15 @@ class BCICommunicationBoard(QMainWindow):
         self.mental_state_str = "NEUTRAL (IDLING) [Power: 0.00]"
         self.facial_state_str = "READY (IDLING)"
 
-        # =========================================================================
-        # COMPOSED MESSAGE & QUICK-ACTION CONTROL BAY
-        # =========================================================================
-        # 1. Instantiate layout container first
+        # Message & Quick Action Control Bay
         message_bar_layout = QHBoxLayout()
 
-        # 2. Display box
         self.display_box = QLabel("Composed Message: ")
         self.display_box.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
         self.display_box.setStyleSheet("background-color: #1e1e24; color: #2ecc71; padding: 15px; border-radius: 8px; border: 2px solid #111115;")
         self.display_box.setWordWrap(True)
         message_bar_layout.addWidget(self.display_box, stretch=1)
 
-        # 3. Quick Control Sidebar Buttons
         action_btn_layout = QVBoxLayout()
         action_btn_layout.setSpacing(6)
 
@@ -471,12 +759,10 @@ class BCICommunicationBoard(QMainWindow):
         self.exit_app_btn.clicked.connect(self.close)
         action_btn_layout.addWidget(self.exit_app_btn)
 
-        # 4. Attach action bar into message layout, then attach to main layout
         message_bar_layout.addLayout(action_btn_layout)
         self.main_layout.addLayout(message_bar_layout)
-        # =========================================================================
 
-        # Dynamic Unified Telemetry Box
+        # Dynamic Unified Telemetry & State Tracker Box
         self.telemetry_label = QLabel()
         self.telemetry_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         self.main_layout.addWidget(self.telemetry_label)
@@ -577,7 +863,13 @@ class BCICommunicationBoard(QMainWindow):
         self.facial_selector.toggled.connect(self.handle_stream_selectors_toggled)
         status_layout.addWidget(self.facial_selector)
 
-        self.keyboard_network_status_label = QLabel("BCI: Calibration Completed.")
+        # 🔋 Live Battery & Signal Diagnostics Banner
+        self.keyboard_diagnostics_label = QLabel("🔋 --%  📶 --%")
+        self.keyboard_diagnostics_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.keyboard_diagnostics_label.setStyleSheet("color: #4f5d75; padding-right: 10px;")
+        status_layout.addWidget(self.keyboard_diagnostics_label)
+
+        self.keyboard_network_status_label = QLabel("BCI: Active.")
         self.keyboard_network_status_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.keyboard_network_status_label.setStyleSheet("color: #2ecc71; padding-right: 10px;")
         status_layout.addWidget(self.keyboard_network_status_label)
@@ -596,6 +888,17 @@ class BCICommunicationBoard(QMainWindow):
 
         self.update_telemetry_box("neutral")
 
+    def update_device_diagnostics(self, battery_pct, signal_pct):
+        """Updates live battery percentage and signal quality indicators across UI screens."""
+        batt_color = "#2ecc71" if battery_pct > 50 else ("#f39c12" if battery_pct > 20 else "#d9145a")
+        diag_text = f"🔋 {battery_pct}%   📶 {signal_pct}%"
+        
+        self.keyboard_diagnostics_label.setText(diag_text)
+        self.keyboard_diagnostics_label.setStyleSheet(f"color: {batt_color}; font-weight: bold; padding-right: 10px;")
+
+        current_dev = self.device_name_label.text().split("  |  ")[0]
+        self.device_name_label.setText(f"{current_dev}  |  {diag_text}")
+
     def handle_mental_slider_changed(self, value):
         self.MENTAL_THRESHOLD = value / 100.0
         self.mental_slider_lbl.setText(f"Thought Sens: {self.MENTAL_THRESHOLD:.2f}")
@@ -611,7 +914,6 @@ class BCICommunicationBoard(QMainWindow):
         self.cooldown_slider_lbl.setText(f"Cooldown: {self.SELECTION_COOLDOWN_MS/1000:.1f}s")
 
     def update_telemetry_box(self, style_preset="neutral"):
-        # Guard: If system is currently on cooldown, keep the prominent countdown bar visible
         if self.in_cooldown:
             return
 
@@ -872,9 +1174,6 @@ class BCICommunicationBoard(QMainWindow):
         elif event.key() == Qt.Key.Key_P and self.page_container.currentIndex() == 1:
             self.process_selection("PAUSE SCANNER")
 
-    # =========================================================================
-    # ⏱️ STATE TRACKER OVERRIDE COOLDOWN CONTROLLER
-    # =========================================================================
     def trigger_select_event(self):
         if self.scanning_state == self.SCAN_ROWS:
             self.scanning_state = self.SCAN_COLS
@@ -898,7 +1197,7 @@ class BCICommunicationBoard(QMainWindow):
         self.cooldown_remaining_ms = self.SELECTION_COOLDOWN_MS
         
         self.render_cooldown_in_state_tracker()
-        self.cooldown_ticker.start(100) # Ticks every 100ms for high-frequency smooth updates
+        self.cooldown_ticker.start(100)
 
     def tick_cooldown_countdown(self):
         self.cooldown_remaining_ms -= 100
@@ -909,7 +1208,6 @@ class BCICommunicationBoard(QMainWindow):
             self.render_cooldown_in_state_tracker()
 
     def render_cooldown_in_state_tracker(self):
-        """Replaces standard telemetry text with a highly visible cooldown banner."""
         sec_str = f"{self.cooldown_remaining_ms/1000:.1f}"
         text = f"⏳ BCI PAUSE — [{self.cooldown_phase_label.upper()}]  |  RESUMING IN {sec_str}s  (RELAX MIND / FACE)"
         
@@ -1007,21 +1305,6 @@ class BCICommunicationBoard(QMainWindow):
                 self.composed_text += text + " "
                 
         self.display_box.setText(f"Composed Message: {self.composed_text}")
-
-    def closeEvent(self, event):
-        """Immediately terminates all background WebSocket threads and releases the terminal."""
-        print("[SYSTEM] Shutting down application...")
-        
-        # Stop UI timers
-        if hasattr(self, 'timer'):
-            self.timer.stop()
-        if hasattr(self, 'cooldown_ticker'):
-            self.cooldown_ticker.stop()
-        event.accept()
-        QApplication.quit()
-        # Hard-kill the Python process
-        import os
-        os._exit(0)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
